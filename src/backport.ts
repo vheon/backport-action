@@ -7,8 +7,9 @@ import {
   MergeStrategy,
 } from "./github";
 import { GithubApi } from "./github";
-import { Git, GitRefNotFoundError } from "./git";
+import { Git, GitRefNotFoundError, PushResult } from "./git";
 import * as utils from "./utils";
+import { MessageType, composeComment } from "./composer";
 
 type PRContent = {
   title: string;
@@ -62,6 +63,8 @@ export class Backport {
 
   async run(): Promise<void> {
     try {
+      const run_id = this.github.getRunId();
+      const run_url = this.github.getRunUrl();
       const payload = this.github.getPayload();
       const owner = this.github.getRepo().owner;
       const repo = payload.repository?.name ?? this.github.getRepo().repo;
@@ -280,14 +283,16 @@ export class Backport {
           }
 
           console.info(`Push branch to origin`);
-          const pushExitCode = await this.git.push(branchname, this.config.pwd);
-          if (pushExitCode != 0) {
-            const message = this.composeMessageForGitPushFailure(
-              target,
-              pushExitCode,
-            );
-            console.error(message);
+          const push_result = await this.git.push(branchname, this.config.pwd);
+          if (push_result != PushResult.success) {
+            console.error(`Failed to push '${target}' due to ${push_result}`);
             successByTarget.set(target, false);
+            const message = composeComment(MessageType.failed_to_push, {
+              run_id,
+              run_url,
+              push_result,
+              target,
+            });
             await this.github.createComment({
               owner,
               repo,
@@ -491,14 +496,6 @@ export class Backport {
       git switch --create ${branchname}
       git cherry-pick -x ${commitShasToCherryPick.join(" ")}
       \`\`\``;
-  }
-
-  private composeMessageForGitPushFailure(
-    target: string,
-    exitcode: number,
-  ): string {
-    //TODO better error messages depending on exit code
-    return dedent`Git push to origin failed for ${target} with exitcode ${exitcode}`;
   }
 
   private composeMessageForCreatePRFailed(
